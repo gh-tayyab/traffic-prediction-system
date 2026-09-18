@@ -5,4 +5,4 @@ __pycache__/
 .next/
 node_modules/
 .env
-.env.local
+.env.localmodels/forecasting/best_forecasting_model_original.pkl

@@ -404,8 +404,8 @@ rf_model = Pipeline(
         (
             "model",
             RandomForestRegressor(
-                n_estimators=300,
-                max_depth=25,
+                n_estimators=60,
+                max_depth=18,
                 min_samples_leaf=2,
                 random_state=42,
                 n_jobs=-1
