@@ -10,6 +10,10 @@ import {
   CalendarDays,
   ArrowUpRight,
   RefreshCw,
+  MapPin,
+  Clock3,
+  Radio,
+  AlertTriangle,
 } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
@@ -45,6 +49,29 @@ interface DayData {
   traffic_volume: number;
 }
 
+interface LiveJam {
+  id: number;
+  street: string;
+  city: string;
+  level: number;
+  length_meters: number;
+  speed_kmh: number;
+  latitude: number;
+  longitude: number;
+  end_node: string | null;
+  update_millis: number;
+}
+
+interface LiveTraffic {
+  source: string;
+  city: string;
+  live: boolean;
+  jam_count: number;
+  max_jam_level: number;
+  congestion_status: string;
+  jams: LiveJam[];
+}
+
 export default function Home() {
   const [statistics, setStatistics] = useState<Statistics | null>(null);
   const [prediction, setPrediction] = useState<Prediction | null>(null);
@@ -52,7 +79,41 @@ export default function Home() {
   const [dayData, setDayData] = useState<DayData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [liveTraffic, setLiveTraffic] = useState<LiveTraffic | null>(null);
+  const [liveLoading, setLiveLoading] = useState(true);
 
+  async function loadLiveTraffic() {
+    try {
+      setLiveLoading(true);
+
+      const response = await fetch(`${API_URL}/live-traffic`);
+
+      if (!response.ok) {
+        throw new Error("Unable to load live traffic.");
+      }
+
+      const data = await response.json();
+
+      setLiveTraffic(data);
+    } catch (err) {
+      console.error("Live traffic error:", err);
+    } finally {
+      setLiveLoading(false);
+    }
+  }
+  function getNextHourPredictionTime() {
+    const now = new Date();
+
+    now.setMinutes(0, 0, 0);
+    now.setHours(now.getHours() + 1);
+
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    const hour = String(now.getHours()).padStart(2, "0");
+
+    return `${year}-${month}-${day} ${hour}:00:00`;
+  }
   async function loadDashboard() {
     try {
       setLoading(true);
@@ -71,7 +132,7 @@ export default function Home() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            prediction_time: "2018-09-30 23:00:00",
+            prediction_time: getNextHourPredictionTime(),
           }),
         }),
         fetch(`${API_URL}/traffic-by-hour`),
@@ -99,7 +160,7 @@ export default function Home() {
     } catch (err) {
       console.error(err);
       setError(
-        "Could not connect to the Traffic Prediction API. Make sure FastAPI is running on port 8000."
+        "Could not connect to the Traffic Prediction API. Make sure FastAPI is running on port 8000.",
       );
     } finally {
       setLoading(false);
@@ -108,6 +169,16 @@ export default function Home() {
 
   useEffect(() => {
     loadDashboard();
+    loadLiveTraffic();
+
+    const interval = setInterval(
+      () => {
+        loadLiveTraffic();
+      },
+      5 * 60 * 1000,
+    );
+
+    return () => clearInterval(interval);
   }, []);
 
   const formatNumber = (value: number) =>
@@ -192,8 +263,8 @@ export default function Home() {
                 </h2>
 
                 <p className="mt-3 max-w-2xl text-slate-400">
-                  Analyze historical traffic patterns and predict the next
-                  hour using a trained Random Forest forecasting model.
+                  Analyze historical traffic patterns and predict the next hour
+                  using a trained Random Forest forecasting model.
                 </p>
               </div>
 
@@ -265,10 +336,10 @@ export default function Home() {
                 <p className="text-sm font-medium text-slate-500">
                   NEXT-HOUR FORECAST
                 </p>
-
-                <h3 className="mt-1 text-xl font-bold">
-                  Traffic Prediction
-                </h3>
+                <p className="mt-2 text-sm text-slate-500">
+  ML forecast for the next hour based on historical traffic patterns.
+</p>
+                <h3 className="mt-1 text-xl font-bold">Traffic Prediction</h3>
               </div>
 
               <div className="rounded-lg bg-slate-100 p-2">
@@ -290,7 +361,7 @@ export default function Home() {
 
                 <div
                   className={`mt-6 inline-flex rounded-full border px-4 py-2 text-sm font-semibold ${congestionClass(
-                    prediction.congestion_level
+                    prediction.congestion_level,
                   )}`}
                 >
                   {prediction.congestion_level} Congestion
@@ -311,9 +382,7 @@ export default function Home() {
 
                   <div className="flex justify-between">
                     <span className="text-slate-500">MAE</span>
-                    <span className="font-medium">
-                      {prediction.model_mae}
-                    </span>
+                    <span className="font-medium">{prediction.model_mae}</span>
                   </div>
                 </div>
               </>
@@ -340,11 +409,10 @@ export default function Home() {
 
             <div className="flex h-64 items-end gap-1.5 sm:gap-2">
               {hourData.map((item) => {
-                const height =
-                  Math.max(
-                    (item.traffic_volume / maxHourlyTraffic) * 100,
-                    4
-                  );
+                const height = Math.max(
+                  (item.traffic_volume / maxHourlyTraffic) * 100,
+                  4,
+                );
 
                 return (
                   <div
@@ -356,7 +424,7 @@ export default function Home() {
                         className="w-full rounded-t-md bg-slate-800 transition-all group-hover:bg-slate-600"
                         style={{ height: `${height}%` }}
                         title={`${item.hour}:00 — ${formatNumber(
-                          item.traffic_volume
+                          item.traffic_volume,
                         )} vehicles`}
                       />
                     </div>
@@ -384,9 +452,7 @@ export default function Home() {
                   WEEKLY PATTERN
                 </p>
 
-                <h3 className="text-xl font-bold">
-                  Traffic by Day
-                </h3>
+                <h3 className="text-xl font-bold">Traffic by Day</h3>
               </div>
             </div>
 
@@ -394,20 +460,15 @@ export default function Home() {
               {dayData.map((item) => {
                 const maxDay =
                   dayData.length > 0
-                    ? Math.max(
-                        ...dayData.map((day) => day.traffic_volume)
-                      )
+                    ? Math.max(...dayData.map((day) => day.traffic_volume))
                     : 1;
 
-                const width =
-                  (item.traffic_volume / maxDay) * 100;
+                const width = (item.traffic_volume / maxDay) * 100;
 
                 return (
                   <div key={item.day_name}>
                     <div className="mb-1.5 flex justify-between text-sm">
-                      <span className="font-medium">
-                        {item.day_name}
-                      </span>
+                      <span className="font-medium">{item.day_name}</span>
 
                       <span className="text-slate-500">
                         {formatNumber(item.traffic_volume)}
@@ -434,13 +495,9 @@ export default function Home() {
               </div>
 
               <div>
-                <p className="text-sm font-medium text-slate-500">
-                  DATASET
-                </p>
+                <p className="text-sm font-medium text-slate-500">DATASET</p>
 
-                <h3 className="text-xl font-bold">
-                  Dataset Overview
-                </h3>
+                <h3 className="text-xl font-bold">Dataset Overview</h3>
               </div>
             </div>
 
@@ -475,13 +532,215 @@ export default function Home() {
                     {statistics.data_start}
                   </p>
 
-                  <p className="text-sm text-slate-500">
-                    to
-                  </p>
+                  <p className="text-sm text-slate-500">to</p>
 
-                  <p className="text-sm font-semibold">
-                    {statistics.data_end}
-                  </p>
+                  <p className="text-sm font-semibold">{statistics.data_end}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+        {/* Live Traffic */}
+        <section className="mb-8">
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 p-6">
+              <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl bg-red-50 p-3 text-red-600">
+                    <Radio size={21} />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-slate-500">
+                        REAL-TIME TRAFFIC
+                      </p>
+
+                      <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                        LIVE
+                      </span>
+                    </div>
+
+                    <h3 className="mt-1 text-xl font-bold">
+                      Karachi Live Traffic
+                    </h3>
+                  </div>
+                </div>
+
+                {liveTraffic && (
+                  <div
+                    className={`rounded-full border px-4 py-2 text-sm font-semibold ${
+                      liveTraffic.max_jam_level >= 4
+                        ? "border-red-200 bg-red-50 text-red-700"
+                        : liveTraffic.max_jam_level === 3
+                          ? "border-orange-200 bg-orange-50 text-orange-700"
+                          : liveTraffic.max_jam_level === 2
+                            ? "border-yellow-200 bg-yellow-50 text-yellow-700"
+                            : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    }`}
+                  >
+                    {liveTraffic.congestion_status}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {liveLoading ? (
+              <div className="grid gap-4 p-6 sm:grid-cols-3">
+                <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
+                <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
+                <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
+              </div>
+            ) : liveTraffic ? (
+              <>
+                {/* Live Summary */}
+                <div className="grid gap-4 border-b border-slate-100 p-6 sm:grid-cols-3">
+                  <div className="rounded-xl bg-slate-50 p-4">
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <AlertTriangle size={17} />
+                      <span className="text-xs font-medium uppercase tracking-wide">
+                        Active Jams
+                      </span>
+                    </div>
+
+                    <p className="mt-2 text-2xl font-bold">
+                      {liveTraffic.jam_count}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-50 p-4">
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <Gauge size={17} />
+                      <span className="text-xs font-medium uppercase tracking-wide">
+                        Highest Level
+                      </span>
+                    </div>
+
+                    <p className="mt-2 text-2xl font-bold">
+                      Level {liveTraffic.max_jam_level}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-50 p-4">
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <Clock3 size={17} />
+                      <span className="text-xs font-medium uppercase tracking-wide">
+                        Data Source
+                      </span>
+                    </div>
+
+                    <p className="mt-2 text-2xl font-bold">Waze</p>
+                  </div>
+                </div>
+
+                {/* Road List */}
+                <div className="p-6">
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-500">
+                        CURRENT ROAD CONDITIONS
+                      </p>
+
+                      <h4 className="mt-1 text-lg font-bold">
+                        Active Traffic Jams
+                      </h4>
+                    </div>
+
+                    <button
+                      onClick={loadLiveTraffic}
+                      disabled={liveLoading}
+                      className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      <RefreshCw
+                        size={15}
+                        className={liveLoading ? "animate-spin" : ""}
+                      />
+                      Refresh
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {liveTraffic.jams.map((jam) => {
+                      const levelClass =
+                        jam.level >= 4
+                          ? "border-red-200 bg-red-50 text-red-700"
+                          : jam.level === 3
+                            ? "border-orange-200 bg-orange-50 text-orange-700"
+                            : jam.level === 2
+                              ? "border-yellow-200 bg-yellow-50 text-yellow-700"
+                              : "border-emerald-200 bg-emerald-50 text-emerald-700";
+
+                      const levelText =
+                        jam.level >= 4
+                          ? "Severe"
+                          : jam.level === 3
+                            ? "Heavy"
+                            : jam.level === 2
+                              ? "Moderate"
+                              : "Light";
+
+                      return (
+                        <div
+                          key={jam.id}
+                          className="flex flex-col gap-4 rounded-xl border border-slate-100 bg-slate-50 p-4 md:flex-row md:items-center md:justify-between"
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="mt-0.5 rounded-lg bg-white p-2 text-slate-500">
+                              <MapPin size={18} />
+                            </div>
+
+                            <div>
+                              <p className="font-semibold">
+                                {jam.street || "Unnamed Road"}
+                              </p>
+
+                              <p className="mt-1 text-sm text-slate-500">
+                                {jam.city || "Karachi"}
+                                {jam.end_node ? ` • ${jam.end_node}` : ""}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="text-right">
+                              <p className="text-xs text-slate-400">
+                                CURRENT SPEED
+                              </p>
+
+                              <p className="font-bold">
+                                {jam.speed_kmh.toFixed(1)} km/h
+                              </p>
+                            </div>
+
+                            <div className="text-right">
+                              <p className="text-xs text-slate-400">
+                                JAM LENGTH
+                              </p>
+
+                              <p className="font-bold">
+                                {jam.length_meters >= 1000
+                                  ? `${(jam.length_meters / 1000).toFixed(1)} km`
+                                  : `${Math.round(jam.length_meters)} m`}
+                              </p>
+                            </div>
+
+                            <span
+                              className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${levelClass}`}
+                            >
+                              {levelText}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="p-6">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
+                  Live traffic data is currently unavailable.
                 </div>
               </div>
             )}
@@ -519,21 +778,13 @@ function MetricCard({
           <p className="mt-1 text-xs text-slate-400">{description}</p>
         </div>
 
-        <div className="rounded-xl bg-slate-100 p-3">
-          {icon}
-        </div>
+        <div className="rounded-xl bg-slate-100 p-3">{icon}</div>
       </div>
     </div>
   );
 }
 
-function InfoBox({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
+function InfoBox({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl bg-slate-50 p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
