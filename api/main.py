@@ -1,3 +1,5 @@
+import os
+import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import pandas as pd
@@ -110,6 +112,116 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+WAZE_API_KEY = os.getenv("WAZE_API_KEY")
+
+KARACHI_BBOX = {
+    "bottom-left": "24.75,66.85",
+    "top-right": "25.00,67.20",
+}
+
+@app.get("/live-traffic")
+def live_traffic():
+    if not WAZE_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="WAZE_API_KEY is not configured"
+        )
+
+    url = "https://api.wazeapi.com/v1/alerts/jams"
+
+    headers = {
+        "X-API-Key": WAZE_API_KEY
+    }
+
+    try:
+        response = requests.get(
+            url,
+            params=KARACHI_BBOX,
+            headers=headers,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "waze_status": response.status_code,
+                    "waze_response": response.text
+                }
+            )
+
+        data = response.json()
+
+        # WazeAPI returns a list directly
+        if isinstance(data, list):
+            jams = data
+        elif isinstance(data, dict):
+            jams = data.get("jams", [])
+        else:
+            jams = []
+
+        traffic_data = []
+
+        for jam in jams:
+            speed_mps = jam.get("speed", 0) or 0
+
+            # Convert m/s to km/h
+            speed_kmh = speed_mps * 3.6
+
+            traffic_data.append({
+                "id": jam.get("id"),
+                "street": jam.get("street"),
+                "city": jam.get("city"),
+                "level": jam.get("level"),
+                "length_meters": jam.get("length"),
+                "speed_kmh": round(speed_kmh, 2),
+                "latitude": jam.get("locationY"),
+                "longitude": jam.get("locationX"),
+                "end_node": jam.get("endNode"),
+                "update_millis": jam.get("updateMillis"),
+            })
+
+        # Find highest congestion level
+        max_level = max(
+            [jam.get("level", 0) or 0 for jam in jams],
+            default=0
+        )
+
+        if max_level == 0:
+            congestion_status = "No Active Jams"
+        elif max_level == 1:
+            congestion_status = "Light Traffic"
+        elif max_level == 2:
+            congestion_status = "Moderate Traffic"
+        elif max_level == 3:
+            congestion_status = "Heavy Traffic"
+        else:
+            congestion_status = "Severe Traffic"
+
+        return {
+            "source": "WazeAPI",
+            "city": "Karachi",
+            "live": True,
+            "jam_count": len(traffic_data),
+            "max_jam_level": max_level,
+            "congestion_status": congestion_status,
+            "jams": traffic_data,
+        }
+
+    except HTTPException:
+        raise
+
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"WazeAPI request failed: {str(e)}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Live traffic processing failed: {str(e)}"
+        )
 
 # ============================================================
 # REQUEST MODEL
