@@ -70,6 +70,35 @@ interface LiveTraffic {
   max_jam_level: number;
   congestion_status: string;
   jams: LiveJam[];
+  cached: boolean;
+  stale: boolean;
+  cache_age_seconds: number | null;
+  cache_ttl_seconds: number;
+}
+
+interface SystemStatus {
+  overall_status: "healthy" | "degraded";
+  api: {
+    status: string;
+  };
+  model: {
+    status: string;
+  };
+  historical_data: {
+    status: string;
+    rows: number;
+  };
+  waze: {
+    status: string;
+  };
+  live_traffic: {
+    status: string;
+    jam_count: number;
+    congestion_status: string;
+    cache_status: string;
+    cache_age_seconds: number | null;
+    cache_ttl_seconds: number;
+  };
 }
 
 export default function Home() {
@@ -81,20 +110,27 @@ export default function Home() {
   const [error, setError] = useState("");
   const [liveTraffic, setLiveTraffic] = useState<LiveTraffic | null>(null);
   const [liveLoading, setLiveLoading] = useState(true);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [systemLoading, setSystemLoading] = useState(true);
 
   async function loadLiveTraffic() {
     try {
       setLiveLoading(true);
 
-      const response = await fetch(`${API_URL}/live-traffic`);
+      const response = await fetch(`${API_URL}/live-traffic`, {
+        cache: "no-store",
+      });
 
       if (!response.ok) {
         throw new Error("Unable to load live traffic.");
       }
 
-      const data = await response.json();
+      const data: LiveTraffic = await response.json();
 
       setLiveTraffic(data);
+
+      // Refresh system status after live traffic cache is updated.
+      await loadSystemStatus();
     } catch (err) {
       console.error("Live traffic error:", err);
     } finally {
@@ -113,6 +149,29 @@ export default function Home() {
     const hour = String(now.getHours()).padStart(2, "0");
 
     return `${year}-${month}-${day} ${hour}:00:00`;
+  }
+  async function loadSystemStatus() {
+    try {
+      setSystemLoading(true);
+
+      const response = await fetch(`${API_URL}/system-status`, {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to load system status.");
+      }
+
+      const data: SystemStatus = await response.json();
+
+      setSystemStatus(data);
+    } catch (err) {
+      console.error("System status error:", err);
+
+      setSystemStatus(null);
+    } finally {
+      setSystemLoading(false);
+    }
   }
   async function loadDashboard() {
     try {
@@ -171,14 +230,11 @@ export default function Home() {
     loadDashboard();
     loadLiveTraffic();
 
-    const interval = setInterval(
-      () => {
-        loadLiveTraffic();
-      },
-      5 * 60 * 1000,
-    );
+    const liveInterval = setInterval(() => {
+      loadLiveTraffic();
+    }, 60 * 1000);
 
-    return () => clearInterval(interval);
+    return () => clearInterval(liveInterval);
   }, []);
 
   const formatNumber = (value: number) =>
@@ -227,8 +283,17 @@ export default function Home() {
 
           <div className="flex items-center gap-4">
             <div className="hidden items-center gap-2 text-sm text-slate-500 sm:flex">
-              <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-              API Online
+              <span
+                className={`h-2.5 w-2.5 rounded-full ${
+                  systemStatus?.api.status === "online"
+                    ? "bg-emerald-500"
+                    : "bg-red-500"
+                }`}
+              />
+
+              {systemStatus?.api.status === "online"
+                ? "API Online"
+                : "API Offline"}
             </div>
 
             <button
@@ -337,8 +402,9 @@ export default function Home() {
                   NEXT-HOUR FORECAST
                 </p>
                 <p className="mt-2 text-sm text-slate-500">
-  ML forecast for the next hour based on historical traffic patterns.
-</p>
+                  ML forecast for the next hour based on historical traffic
+                  patterns.
+                </p>
                 <h3 className="mt-1 text-xl font-bold">Traffic Prediction</h3>
               </div>
 
@@ -540,6 +606,127 @@ export default function Home() {
             )}
           </div>
         </section>
+        {/* System Status */}
+        <section className="mb-8">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-slate-500">
+                    SYSTEM MONITORING
+                  </p>
+
+                  {systemStatus && (
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                        systemStatus.overall_status === "healthy"
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-yellow-50 text-yellow-700"
+                      }`}
+                    >
+                      {systemStatus.overall_status === "healthy"
+                        ? "HEALTHY"
+                        : "DEGRADED"}
+                    </span>
+                  )}
+                </div>
+
+                <h3 className="mt-1 text-xl font-bold">System Status</h3>
+              </div>
+
+              <button
+                onClick={loadSystemStatus}
+                disabled={systemLoading}
+                className="flex items-center gap-2 self-start rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium transition hover:bg-slate-50 disabled:opacity-50 sm:self-auto"
+              >
+                <RefreshCw
+                  size={15}
+                  className={systemLoading ? "animate-spin" : ""}
+                />
+                Refresh Status
+              </button>
+            </div>
+
+            {systemLoading && !systemStatus ? (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                {Array.from({ length: 5 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="h-24 animate-pulse rounded-xl bg-slate-100"
+                  />
+                ))}
+              </div>
+            ) : systemStatus ? (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  <StatusItem label="API" status={systemStatus.api.status} />
+
+                  <StatusItem
+                    label="ML Model"
+                    status={systemStatus.model.status}
+                  />
+
+                  <StatusItem
+                    label="Historical Data"
+                    status={systemStatus.historical_data.status}
+                    detail={`${formatNumber(systemStatus.historical_data.rows)} rows`}
+                  />
+
+                  <StatusItem
+                    label="WazeAPI"
+                    status={systemStatus.waze.status}
+                  />
+
+                  <StatusItem
+                    label="Live Traffic"
+                    status={systemStatus.live_traffic.status}
+                    detail={`${systemStatus.live_traffic.jam_count} active jams`}
+                  />
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl bg-slate-50 p-4">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                      Live Status
+                    </p>
+
+                    <p className="mt-2 font-semibold">
+                      {systemStatus.live_traffic.congestion_status}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-50 p-4">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                      Cache
+                    </p>
+
+                    <p className="mt-2 font-semibold capitalize">
+                      {systemStatus.live_traffic.cache_status}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-50 p-4">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                      Cache Age
+                    </p>
+
+                    <p className="mt-2 font-semibold">
+                      {systemStatus.live_traffic.cache_age_seconds === null
+                        ? "Not loaded"
+                        : `${Math.round(
+                            systemStatus.live_traffic.cache_age_seconds,
+                          )} sec ago`}
+                    </p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                System status is currently unavailable.
+              </div>
+            )}
+          </div>
+        </section>
         {/* Live Traffic */}
         <section className="mb-8">
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -556,10 +743,25 @@ export default function Home() {
                         REAL-TIME TRAFFIC
                       </p>
 
-                      <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-                        LIVE
-                      </span>
+                      {liveTraffic && (
+                        <span
+                          className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                            liveTraffic.stale
+                              ? "bg-yellow-50 text-yellow-700"
+                              : "bg-emerald-50 text-emerald-700"
+                          }`}
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              liveTraffic.stale
+                                ? "bg-yellow-500"
+                                : "animate-pulse bg-emerald-500"
+                            }`}
+                          />
+
+                          {liveTraffic.stale ? "STALE" : "LIVE"}
+                        </span>
+                      )}
                     </div>
 
                     <h3 className="mt-1 text-xl font-bold">
@@ -792,6 +994,54 @@ function InfoBox({ label, value }: { label: string; value: string }) {
       </p>
 
       <p className="mt-2 text-xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function StatusItem({
+  label,
+  status,
+  detail,
+}: {
+  label: string;
+  status: string;
+  detail?: string;
+}) {
+  const isHealthy = ["online", "ready", "configured", "live"].includes(
+    status.toLowerCase(),
+  );
+
+  const isWarning = ["stale", "expired", "degraded"].includes(
+    status.toLowerCase(),
+  );
+
+  const dotClass = isHealthy
+    ? "bg-emerald-500"
+    : isWarning
+      ? "bg-yellow-500"
+      : "bg-red-500";
+
+  const textClass = isHealthy
+    ? "text-emerald-700"
+    : isWarning
+      ? "text-yellow-700"
+      : "text-red-700";
+
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+          {label}
+        </p>
+
+        <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
+      </div>
+
+      <p className={`mt-2 font-semibold capitalize ${textClass}`}>
+        {status.replace("_", " ")}
+      </p>
+
+      {detail && <p className="mt-1 text-xs text-slate-400">{detail}</p>}
     </div>
   );
 }

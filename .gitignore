@@ -6,3 +6,4 @@ __pycache__/
 node_modules/
 .env
 .env.localmodels/forecasting/best_forecasting_model_original.pkl
+models/forecasting/best_forecasting_model_original.pkl

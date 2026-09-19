@@ -9,6 +9,7 @@ import {
   CloudSun,
   Activity,
   Gauge,
+  Radio,
 } from "lucide-react";
 
 const navigation = [
@@ -16,6 +17,11 @@ const navigation = [
     name: "Dashboard",
     href: "/",
     icon: LayoutDashboard,
+  },
+  {
+    name: "Live Traffic",
+    href: "/live-traffic",
+    icon: Radio,
   },
   {
     name: "Prediction",

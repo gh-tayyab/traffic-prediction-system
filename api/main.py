@@ -299,6 +299,78 @@ def live_traffic():
             detail=f"Live traffic processing failed: {str(e)}",
         )
 
+@app.get("/system-status")
+def system_status():
+    model_status = MODEL_PATH.exists()
+    data_status = DATA_PATH.exists()
+    waze_status = bool(WAZE_API_KEY)
+
+    cache_data = LIVE_TRAFFIC_CACHE.get("data")
+    cached_at = LIVE_TRAFFIC_CACHE.get("cached_at")
+
+    cache_age = None
+    cache_status = "empty"
+    live_status = "not_loaded"
+    jam_count = 0
+    congestion_status = "Unknown"
+
+    if cached_at:
+        cache_age = round(
+            (datetime.now(timezone.utc) - cached_at).total_seconds(),
+            1
+        )
+
+        if cache_age < LIVE_TRAFFIC_CACHE_TTL:
+            cache_status = "fresh"
+        else:
+            cache_status = "expired"
+
+    if cache_data:
+        jam_count = cache_data.get("jam_count", 0)
+        congestion_status = cache_data.get(
+            "congestion_status",
+            "Unknown"
+        )
+
+        if cache_age is not None and cache_age < LIVE_TRAFFIC_CACHE_TTL:
+            live_status = "live"
+        else:
+            live_status = "stale"
+
+    return {
+        "overall_status": (
+            "healthy"
+            if model_status and data_status and waze_status
+            else "degraded"
+        ),
+
+        "api": {
+            "status": "online"
+        },
+
+        "model": {
+            "status": "ready" if model_status else "missing"
+        },
+
+        "historical_data": {
+            "status": "ready" if data_status else "missing",
+            "rows": len(df)
+        },
+
+        "waze": {
+            "status": "configured" if waze_status else "missing"
+        },
+
+        "live_traffic": {
+            "status": live_status,
+            "jam_count": jam_count,
+            "congestion_status": congestion_status,
+            "cache_status": cache_status,
+            "cache_age_seconds": cache_age,
+            "cache_ttl_seconds": LIVE_TRAFFIC_CACHE_TTL
+        }
+    }
+
 # ============================================================
 # REQUEST MODEL
 # ============================================================
