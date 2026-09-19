@@ -7,6 +7,7 @@ import numpy as np
 import joblib
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime, timezone
 
 
 # ============================================================
@@ -119,18 +120,48 @@ KARACHI_BBOX = {
     "top-right": "25.00,67.20",
 }
 
+# Waze live traffic cache
+LIVE_TRAFFIC_CACHE = {
+    "data": None,
+    "cached_at": None,
+}
+
+LIVE_TRAFFIC_CACHE_TTL = 60  # seconds
+
 @app.get("/live-traffic")
 def live_traffic():
     if not WAZE_API_KEY:
         raise HTTPException(
             status_code=500,
-            detail="WAZE_API_KEY is not configured"
+            detail="WAZE_API_KEY is not configured",
         )
 
+    now = datetime.now(timezone.utc)
+
+    # ---------------------------------------------------------
+    # 1. Return fresh cached data
+    # ---------------------------------------------------------
+    cached_data = LIVE_TRAFFIC_CACHE.get("data")
+    cached_at = LIVE_TRAFFIC_CACHE.get("cached_at")
+
+    if cached_data is not None and cached_at is not None:
+        cache_age = (now - cached_at).total_seconds()
+
+        if cache_age < LIVE_TRAFFIC_CACHE_TTL:
+            return {
+                **cached_data,
+                "cached": True,
+                "cache_age_seconds": round(cache_age, 1),
+                "cache_ttl_seconds": LIVE_TRAFFIC_CACHE_TTL,
+            }
+
+    # ---------------------------------------------------------
+    # 2. Fetch fresh data from WazeAPI
+    # ---------------------------------------------------------
     url = "https://api.wazeapi.com/v1/alerts/jams"
 
     headers = {
-        "X-API-Key": WAZE_API_KEY
+        "X-API-Key": WAZE_API_KEY,
     }
 
     try:
@@ -138,25 +169,42 @@ def live_traffic():
             url,
             params=KARACHI_BBOX,
             headers=headers,
-            timeout=15
+            timeout=15,
         )
 
         if response.status_code != 200:
+            # If fresh request fails but cached data exists,
+            # return the old data instead of breaking the dashboard.
+            if cached_data is not None and cached_at is not None:
+                cache_age = (now - cached_at).total_seconds()
+
+                return {
+                    **cached_data,
+                    "cached": True,
+                    "stale": True,
+                    "cache_age_seconds": round(cache_age, 1),
+                    "cache_ttl_seconds": LIVE_TRAFFIC_CACHE_TTL,
+                    "warning": "Live Waze data temporarily unavailable. Showing cached data.",
+                }
+
             raise HTTPException(
                 status_code=502,
                 detail={
                     "waze_status": response.status_code,
-                    "waze_response": response.text
-                }
+                    "waze_response": response.text,
+                },
             )
 
         data = response.json()
 
-        # WazeAPI returns a list directly
+        # WazeAPI may return a list directly
+        # or an object containing "jams".
         if isinstance(data, list):
             jams = data
+
         elif isinstance(data, dict):
             jams = data.get("jams", [])
+
         else:
             jams = []
 
@@ -164,27 +212,29 @@ def live_traffic():
 
         for jam in jams:
             speed_mps = jam.get("speed", 0) or 0
-
-            # Convert m/s to km/h
             speed_kmh = speed_mps * 3.6
 
-            traffic_data.append({
-                "id": jam.get("id"),
-                "street": jam.get("street"),
-                "city": jam.get("city"),
-                "level": jam.get("level"),
-                "length_meters": jam.get("length"),
-                "speed_kmh": round(speed_kmh, 2),
-                "latitude": jam.get("locationY"),
-                "longitude": jam.get("locationX"),
-                "end_node": jam.get("endNode"),
-                "update_millis": jam.get("updateMillis"),
-            })
+            traffic_data.append(
+                {
+                    "id": jam.get("id"),
+                    "street": jam.get("street"),
+                    "city": jam.get("city"),
+                    "level": jam.get("level"),
+                    "length_meters": jam.get("length"),
+                    "speed_kmh": round(speed_kmh, 2),
+                    "latitude": jam.get("locationY"),
+                    "longitude": jam.get("locationX"),
+                    "end_node": jam.get("endNode"),
+                    "update_millis": jam.get("updateMillis"),
+                }
+            )
 
-        # Find highest congestion level
         max_level = max(
-            [jam.get("level", 0) or 0 for jam in jams],
-            default=0
+            [
+                jam.get("level", 0) or 0
+                for jam in jams
+            ],
+            default=0,
         )
 
         if max_level == 0:
@@ -198,7 +248,7 @@ def live_traffic():
         else:
             congestion_status = "Severe Traffic"
 
-        return {
+        fresh_data = {
             "source": "WazeAPI",
             "city": "Karachi",
             "live": True,
@@ -208,19 +258,45 @@ def live_traffic():
             "jams": traffic_data,
         }
 
+        # -----------------------------------------------------
+        # 3. Update server-side cache
+        # -----------------------------------------------------
+        LIVE_TRAFFIC_CACHE["data"] = fresh_data
+        LIVE_TRAFFIC_CACHE["cached_at"] = now
+
+        return {
+            **fresh_data,
+            "cached": False,
+            "stale": False,
+            "cache_age_seconds": 0,
+            "cache_ttl_seconds": LIVE_TRAFFIC_CACHE_TTL,
+        }
+
     except HTTPException:
         raise
 
     except requests.RequestException as e:
+        if cached_data is not None and cached_at is not None:
+            cache_age = (now - cached_at).total_seconds()
+
+            return {
+                **cached_data,
+                "cached": True,
+                "stale": True,
+                "cache_age_seconds": round(cache_age, 1),
+                "cache_ttl_seconds": LIVE_TRAFFIC_CACHE_TTL,
+                "warning": "WazeAPI request failed. Showing cached data.",
+            }
+
         raise HTTPException(
             status_code=502,
-            detail=f"WazeAPI request failed: {str(e)}"
+            detail=f"WazeAPI request failed: {str(e)}",
         )
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Live traffic processing failed: {str(e)}"
+            detail=f"Live traffic processing failed: {str(e)}",
         )
 
 # ============================================================
